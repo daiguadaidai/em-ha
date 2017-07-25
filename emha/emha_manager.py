@@ -30,7 +30,7 @@ class EMHAManager(object):
 
     zk = None
     mysql_cluster_children_watchs = {}
-    manager_watch = None
+    leader_watch = None
     is_leader = False
     mgr_name = '{name}-{pid}-{ts}'.format(name = socket.gethostname(),
                                           pid = os.getpid(),
@@ -171,7 +171,7 @@ class EMHAManager(object):
                                                         node = mysql_cluster)
             self.mysql_cluster_children_watch(mysql_cluster_path, mysql_cluster)
 
-    def manager_watch_children_op(self, children, event):
+    def leader_watch_children_op(self, children, event):
         """监听 Manager 节点的增删变化
         如果有发生变化就开始进行选举 Leader 操作
         """
@@ -180,31 +180,31 @@ class EMHAManager(object):
             logging.warn('Managers: {children}'.format(children=children))
             return
 
-        logging.warn("watched Manager node change.")
+        logging.warn("watched Manager Leader node change.")
 
         # 参与 Leader 选举
         self.election()
         
-    def manager_watch_children(self, path=None):
+    def leader_watch_children(self, path=None):
         """监听 Manager 节点的子节点增删"""
-        pass
+
 
         if not path:
-            path = EMHAPath.emha_nodes['manager']['path']
+            path = EMHAPath.emha_nodes['mgr_leader']['path']
 
-        logging.info('Manager watch path: {path}'.format(path=path))
+        logging.info('Manager Leader watch path: {path}'.format(path=path))
 
         watch = ChildrenWatch(self.zk, path,
-                              func = self.manager_watch_children_op,
+                              func = self.leader_watch_children_op,
                               send_event = True)
 
-        self.manager_watch = watch
+        self.leader_watch = watch
 
-    def election(self, path=None, node_name=None):
+    def election(self, path=None, identifier=None):
         """Manager Leader 的选举
         Args
             path: Manager 选举 Leader 使用的节点
-            node_name: 该参与选举的 Manager 名称
+            identifier: 该参与选举的 Manager 名称
         Return: None
         Raise: None
         """
@@ -220,10 +220,18 @@ class EMHAManager(object):
             path = EMHAPath.emha_nodes['mgr_leader_election']['path']
             logging.warn('not found Manager election leader path, use default.')
         logging.info('Manager election path: {path}'.format(path=path))
-        
-        election = self.zk.Election(path, node_name)
 
+        # 设置 Manager 选举标识
+        if not identifier:
+            identifier = self.mgr_name
+        
+        election = self.zk.Election(path, identifier=identifier)
+        
+        # 如果日志只有 start election 而没有 end election 代表有hang现象需要找出锁住的进程从而kill进程
+        logging.info('--------------------------start election -----------------------------')
         election.run(self.election_op)
+        logging.info('--------------------------end election -------------------------------')
+        election.cancel()
 
     def election_op(self, leader_path=None, leader_name=None):
         """为 Manager 选举 Leader 的操作
@@ -244,7 +252,7 @@ class EMHAManager(object):
 
         leaders = self.zk.get_children(leader_path)
         logging.info('current leaders: {leaders}'.format(leaders=str(leaders)))
-        
+
         # Leader 已经存在则返回
         if len(leaders) > 0:
             logging.warn('leader exists.')
@@ -253,6 +261,7 @@ class EMHAManager(object):
         # 创建 Leader 节点
         leader_node = '{leader_path}/{leader_name}'.format(leader_path = leader_path,
                                                            leader_name = leader_name)
+
         if self.create_node(path=leader_node, value=leader_name, ephemeral=True):
             logging.info('leader node created.')
         else:
@@ -269,6 +278,10 @@ class EMHAManager(object):
             logging.error('zk not found, can not init emha path')
             return False
 
+        # 初始化根节点
+        self.create_node(**EMHAPath.root_node['root_path'])
+
+        # 初始化二级节点
         for node_name, item in EMHAPath.emha_nodes.iteritems():
             self.create_node(**item)
 
@@ -310,6 +323,72 @@ class EMHAManager(object):
             return False
             
         logging.info('Manager register Successful.')
+
+    def init_mgr_queue(self, path=None):
+        """初始化管理节点(Manager)队列变量
+        Args:
+           mgr_queue: Manager队列路径
+        """
+        if not path:
+            path = EMHAPath.emha_nodes['mgr_queue']['path']
+            logging.warn('no found manager queue path, use default.')
+        logging.info('Manager queue path: {path}'.format(path=path))
+
+        self.mgr_queue = self.zk.Queue(path)
+        logging.info('init Manager queue.')
+   
+    def do_queue_once(self):
+        """Manager处理一次队列
+        Other:
+        queue data foramt: "{'action': 11, 'path': '/em-ha/mysql-clusters', 'node_name': 'cluster03'}"
+        """
+        # data is json format
+        data = self.mgr_queue.get()
+
+        if not data:
+            return None
+
+        info = json.loads(data)
+
+        logging.info('mgr queue action is: {action}'.format(action=info['action']))
+
+        if info['action'] == 11:
+            logging.info('{action} -> craete node'.format(action=info['action']))
+            path = '{path}/{node}'.format(path=info['path'], node=info['node_name'])
+            self.create_node(path=path, value=info['node_name'])
+        else:
+            logging.warn('Manager no do queue: {data}'.format(data=data))
+
+        return True
+
+    def do_queue(self):
+        """不停的获取queue并且进行操作"""
+
+        ok = False
+        none_op_cnt = 0
+        while True:
+
+            # 当前不是leader则不执行
+            if not self.is_leader:
+                none_op_cnt = 0
+                logging.warn('Current Manager is not Leader')
+                time.sleep(1)
+                continue
+            
+
+            # 当空操作为操过 100 次就每操作一次睡眠一次
+            if none_op_cnt >= 100:
+                logging.warn('Manager deal queue None operation, operation count: {cnt}'.format(cnt=none_op_cnt))
+                time.sleep(1)
+            
+            ok = self.do_queue_once()
+
+            if ok:
+                logging.info('Manager deal queue Successful!')
+                none_op_cnt = 0
+            else:
+                none_op_cnt += 1
+        
 
 def main():
     pass

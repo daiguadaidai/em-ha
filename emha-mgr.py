@@ -3,6 +3,7 @@
 
 from emha.emha_manager import EMHAManager
 import argparse
+import threading
 import time
 import sys
 import os
@@ -46,13 +47,23 @@ Description:
 
     return args
 
+def do_queue():
+    """循环操作 Manager queue"""
+
+    global emha_mgr
+
+    emha_mgr.init_mgr_queue()
+    emha_mgr.do_queue()
+
+# 全局变量
+emha_mgr = EMHAManager()
+
 def main():
     # 注册 捕获型号kill信号
-    signal.signal(signal.SIGTERM, kill_sign_op)
+    signal.signal(signal.SIGINT, kill_sign_op) # 终止进程 中断进程 (control+c)
+    signal.signal(signal.SIGTERM, kill_sign_op) # 终止进程 软件终止信号
 
     args = parse_args() # 解析传入参数
-
-    emha_mgr = EMHAManager()
 
     try:
         # 链接 Zookeeper
@@ -71,16 +82,35 @@ def main():
         emha_mgr.election()
 
         # 对leader节点进行监听
-        emha_mgr.manager_watch_children()
+        emha_mgr.leader_watch_children()
+
+        # 开启线程处理 Manager queue 队列
+        mgr_queue_t = threading.Thread(target=do_queue)
+        mgr_queue_t.start()
+
+        # TODO
+        # 启动一个 socket 可以进行接收命令
+        print 'main end open socket will todo'
+
+        """
+        while True:
+            mgr_queue_t.join(2)
+            if not mgr_queue_t.isAlive:
+                break
+        """
 
         while True:
-            time.sleep(1000)
+            time.sleep(2)
 
+        # mgr_queue_t.join()
+    except KeyboardInterrupt:
+        print "Ctrl-c pressed ..."
     except Exception as e:
         print traceback.format_exc()
-
     finally: # 需要断开zk 链接
         emha_mgr.disconn()
+        print 'sys exit'
+        os._exit(1)
 
 if __name__ == '__main__':
     main()

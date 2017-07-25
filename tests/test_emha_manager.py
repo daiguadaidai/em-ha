@@ -10,7 +10,6 @@ import time
 reload(sys)
 sys.setdefaultencoding('utf8')
 
-
 class TestEMHAManager(unittest.TestCase):
     """EMHAManager类的单元测试"""
 
@@ -40,6 +39,10 @@ class TestEMHAManager(unittest.TestCase):
     def test_election(self):
         self.emha_mgr.manager_watch_children()
 
+    def test_mgr_queue(self):
+        self.emha_mgr.init_mgr_queue()
+        self.emha_mgr.do_queue_once()
+
     def test_start_manager(self):
         """测试完整的manager启动流程"""
 
@@ -54,7 +57,8 @@ class TestEMHAManager(unittest.TestCase):
         # 对leader节点进行监听
         self.emha_mgr.manager_watch_children()
 
-        time.sleep(1000)
+        self.emha_mgr.init_mgr_queue()
+        self.emha_mgr.do_queue()
 
 
 if __name__ == '__main__':

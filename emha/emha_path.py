@@ -10,12 +10,15 @@ class EMHAPath(object):
     """EMHA 需要路径信息"""
 
     #### 定义zk需要的节点 ####
-    emha_nodes = {
-        # EMHA root 节点
+    # EMHA root 节点
+    root_node = {
         'root_path': {
             'path': '/em-ha',
             'value': 'EMHA root node',
         },
+    }
+
+    emha_nodes = {
 
         # 该节点代表了每个不同的 MySQL 集群节点
         'mysql_clusters': {
@@ -87,5 +90,11 @@ class EMHAPath(object):
         'agent_queue': {
             'path': '/em-ha/agent-queue',
             'value': 'agent queue',
+        },
+
+        # 没有个Agent需要处理的队列
+        'mgr_queue': {
+            'path': '/em-ha/mgr-queue',
+            'value': 'manager queue',
         },
     }
