@@ -225,13 +225,47 @@ class EMHAManager(object):
         if not identifier:
             identifier = self.mgr_name
         
-        election = self.zk.Election(path, identifier=identifier)
-        
+        semaphore = self.zk.Semaphore(path, identifier=identifier)
+
+        semaphore.acquire(blocking=True, timeout=5)
         # 如果日志只有 start election 而没有 end election 代表有hang现象需要找出锁住的进程从而kill进程
         logging.info('--------------------------start election -----------------------------')
-        election.run(self.election_op)
+
+        leader_name = self.mgr_name
+        logging.info('leader name: {leader_name}'.format(leader_name=leader_name))
+        
+        leader_path = EMHAPath.emha_nodes['mgr_leader']['path']
+        logging.info('leader path: {leader_path}'.format(leader_path=leader_path))
+
+        leaders = self.zk.get_children(leader_path)
+        logging.info('current leaders: {leaders}'.format(leaders=str(leaders)))
+
+        # Leader 已经存在则返回
+        if len(leaders) > 0:
+            logging.warn('leader exists.')
+            semaphore.release()
+            logging.info('--------------------------end election -------------------------------')
+            return False
+
+        # 创建 Leader 节点
+        leader_node = '{leader_path}/{leader_name}'.format(leader_path = leader_path,
+                                                           leader_name = leader_name)
+
+        if self.create_node(path=leader_node, value=leader_name, ephemeral=True):
+            logging.info('leader node created.')
+        else:
+            logging.info('leader node create failure.')
+            semaphore.release()
+            logging.info('--------------------------end election -------------------------------')
+            return False
+
+        # 设置当前 Manager 为 Leader
+        self.is_leader = True
+        semaphore.release()
+
+
+
         logging.info('--------------------------end election -------------------------------')
-        election.cancel()
 
     def election_op(self, leader_path=None, leader_name=None):
         """为 Manager 选举 Leader 的操作
