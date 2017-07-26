@@ -166,6 +166,8 @@ class EMHAManager(object):
 
         mysql_clusters = self.zk.get_children(path) # 获取MySQL Cluster所有的节点
 
+        logging.info('init mysql clusters watcher: {path}'.format(path=path))
+        logging.info('MySQL Clusters: {nodes}'.format(nodes=str(mysql_clusters)))
         for mysql_cluster in mysql_clusters: # 循环添加节点监听
             mysql_cluster_path = '{path}/{node}'.format(path = path,
                                                         node = mysql_cluster)
@@ -183,11 +185,16 @@ class EMHAManager(object):
         logging.warn("watched Manager Leader node change.")
 
         # 参与 Leader 选举
-        self.election()
+        ok = self.election()
+
+        if not ok:
+            return
+
+        # 监听mysqlcluster
+        self.watch_mysql_clusters_children()
         
     def leader_watch_children(self, path=None):
         """监听 Manager 节点的子节点增删"""
-
 
         if not path:
             path = EMHAPath.emha_nodes['mgr_leader']['path']
@@ -212,7 +219,7 @@ class EMHAManager(object):
         # 如果已经是Leader则直接退出不参加选举
         if self.is_leader:
             logging.warn("current Manager is Leader. do not attend election.")
-            return True
+            return False
          
 
         # 设置 Manager 选举路径
@@ -261,49 +268,11 @@ class EMHAManager(object):
 
         # 设置当前 Manager 为 Leader
         self.is_leader = True
+
         semaphore.release()
 
-
-
         logging.info('--------------------------end election -------------------------------')
-
-    def election_op(self, leader_path=None, leader_name=None):
-        """为 Manager 选举 Leader 的操作
-        1. 查看是否已经存在 Leader 
-        2. 创建 Leader (临时节点)
-        3. 修改当前 Manager 为 Leader
-        """
-
-        if not leader_name:
-            leader_name = self.mgr_name
-            logging.warn('no leader name. set manager name to leader name.')
-        logging.info('leader name: {leader_name}'.format(leader_name=leader_name))
-        
-        if not leader_path:
-            leader_path = EMHAPath.emha_nodes['mgr_leader']['path']
-            logging.warn('no set leader path, use default.')
-        logging.info('leader path: {leader_path}'.format(leader_path=leader_path))
-
-        leaders = self.zk.get_children(leader_path)
-        logging.info('current leaders: {leaders}'.format(leaders=str(leaders)))
-
-        # Leader 已经存在则返回
-        if len(leaders) > 0:
-            logging.warn('leader exists.')
-            return False
-
-        # 创建 Leader 节点
-        leader_node = '{leader_path}/{leader_name}'.format(leader_path = leader_path,
-                                                           leader_name = leader_name)
-
-        if self.create_node(path=leader_node, value=leader_name, ephemeral=True):
-            logging.info('leader node created.')
-        else:
-            logging.info('leader node create failure.')
-            return False
-
-        # 设置当前 Manager 为 Leader
-        self.is_leader = True
+        return True
 
     def init_nodes(self):
         """初始化需要使用zk节点"""
@@ -374,7 +343,7 @@ class EMHAManager(object):
     def do_queue_once(self):
         """Manager处理一次队列
         Other:
-        queue data foramt: "{'action': 11, 'path': '/em-ha/mysql-clusters', 'node_name': 'cluster03'}"
+        queue data foramt: "{'action': 11, 'node_name': 'cluster03'}"
         """
         # data is json format
         data = self.mgr_queue.get()
@@ -386,10 +355,21 @@ class EMHAManager(object):
 
         logging.info('mgr queue action is: {action}'.format(action=info['action']))
 
-        if info['action'] == 11:
-            logging.info('{action} -> craete node'.format(action=info['action']))
-            path = '{path}/{node}'.format(path=info['path'], node=info['node_name'])
-            self.create_node(path=path, value=info['node_name'])
+        if int(info['action']) == 11:
+            logging.info('{action} -> 1. craete MySQL Cluster node'.format(action=info['action']))
+            logging.info('{action} -> 2. craete agent queue node'.format(action=info['action']))
+            logging.info('{action} -> 3. add watcher to new MySQL Cluster node'.format(action=info['action']))
+            
+            mysql_cluster_node = '{path}/{node}'.format(path = EMHAPath.emha_nodes['mysql_clusters']['path'],
+                                                        node = info['node_name'])
+            agent_queue_node = '{path}/{node}'.format(path = EMHAPath.emha_nodes['agent_queue']['path'],
+                                                        node = info['node_name'])
+            # 创建 MySQL 集群节点
+            self.create_node(path=mysql_cluster_node)
+            # 创建 MySQL Agent Queue 节点
+            self.create_node(path=agent_queue_node)
+            # 监听新节点
+            self.mysql_cluster_children_watch(path=mysql_cluster_node)
         else:
             logging.warn('Manager no do queue: {data}'.format(data=data))
 

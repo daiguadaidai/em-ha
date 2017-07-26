@@ -48,14 +48,21 @@ class TestEMHAManager(unittest.TestCase):
 
         # 初始化节点
         self.emha_mgr.init_nodes()
-        # 监听MySQL集群节点
-        self.emha_mgr.watch_mysql_clusters_children()
         # 注册 Manager
         self.emha_mgr.register()
         # 选举 Leader
         self.emha_mgr.election()
+
+        # 选举 Leader
+        ok = self.emha_mgr.election()
+
+        # 监听MySQL集群节点
+        if ok:
+            self.emha_mgr.watch_mysql_clusters_children()
+
+
         # 对leader节点进行监听
-        self.emha_mgr.manager_watch_children()
+        self.emha_mgr.leader_watch_children()
 
         self.emha_mgr.init_mgr_queue()
         self.emha_mgr.do_queue()

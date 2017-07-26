@@ -72,14 +72,15 @@ def main():
         # 初始化节点
         emha_mgr.init_nodes()
 
-        # 监听MySQL集群节点
-        emha_mgr.watch_mysql_clusters_children()
-
         # 注册 Manager
         emha_mgr.register()
 
         # 选举 Leader
-        emha_mgr.election()
+        ok = emha_mgr.election()
+
+        # 监听MySQL集群节点
+        if ok:
+            emha_mgr.watch_mysql_clusters_children()
 
         # 对leader节点进行监听
         emha_mgr.leader_watch_children()
