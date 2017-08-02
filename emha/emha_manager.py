@@ -23,9 +23,9 @@ logging.basicConfig(
 class EMHAManager(object):
     """EMHA 管理类
     action
-        0: 没有标记
-        1: 节点添加
-        2: 节点删除
+        1: 有节点变动
+        2: 有节点加入
+        3: 有节点删除
     """
 
     zk = None
@@ -354,55 +354,61 @@ class EMHAManager(object):
         logging.info('5. craete cluster update_cluster_data_lock node')
         logging.info('6. craete agent_working node')
         logging.info('7. craete cluster priority_machine_room node')
-        logging.info('8. add watcher to new MySQL Cluster node')
+        logging.info('8. craete cluster nultiple live type node')
+        logging.info('9. add watcher to new MySQL Cluster node')
         
-        mysql_cluster_node =
+        mysql_cluster_node = (
             '{path}/{node}'.format(path = EMHAPath.emha_nodes['mysql_clusters']['path'],
-                                   node = name)
-        agent_queue_node =
+                                   node = name))
+        agent_queue_node = (
             '{path}/{node}'.format(path = EMHAPath.emha_nodes['agent_queue']['path'],
-                                   node = name)
-        cluster_master_node =
+                                   node = name))
+        cluster_master_node = (
             '{path}/{node}'.format(path = EMHAPath.emha_nodes['cluster_master']['path'],
-                                   node = name)
-        agent_leader_node =
+                                   node = name))
+        agent_leader_node = (
             '{path}/{node}'.format(path = EMHAPath.emha_nodes['agent_leader']['path'],
-                                   node = name)
-        update_cluster_data_lock_node =
+                                   node = name))
+        update_cluster_data_lock_node = (
             '{path}/{node}'.format(path = EMHAPath.emha_nodes['update_cluster_data_lock']['path'],
-                                   node = name)
-        agent_warking_node =
+                                   node = name))
+        agent_warking_node = (
             '{path}/{node}'.format(path = EMHAPath.emha_nodes['agent_working']['path'],
-                                   node = name)
-        priority_machine_room_node =
+                                   node = name))
+        priority_machine_room_node = (
             '{path}/{node}'.format(path = EMHAPath.emha_nodes['priority_machine_room']['path'],
-                                   node = name)
-        agent_leader_election_node =
+                                   node = name))
+        agent_leader_election_node = (
             '{path}/{node}'.format(path = EMHAPath.emha_nodes['agent_leader_election']['path'],
-                                   node = name)
+                                   node = name))
+        agent_mul_live_type = (
+            '{path}/{node}'.format(path = EMHAPath.emha_nodes['mul_live_type']['path'],
+                                   node = name))
+
+        # 创建 MySQL Cluster Master 节点
+        self.create_node(path=agent_queue_node, value=name)
+        # 创建 MySQL Agent Queue 节点
+        self.create_node(path=cluster_master_node, value=name)
+        # 创建 Agent Leader Node 节点
+        self.create_node(path=agent_leader_node, value=name)
+        # 创建 更新MySQL集群数据锁节点
+        self.create_node(path=update_cluster_data_lock_node, value=name)
+        # 创建 agent 正在工作的节点
+        self.create_node(path=agent_warking_node, value=name)
+        # 创建 优先使用机房节点
+        self.create_node(path=priority_machine_room_node, value=name)
+        # 创建 优先使用机房节点
+        self.create_node(path=agent_leader_election_node, value=name)
+        # 创建 集群多活类型
+        self.create_node(path=agent_mul_live_type, value=name)
+
         # 初始化集群节点数据
         cluster_data = {
-            'instances': [],
             'machine-rooms': {},
         }
         cluster_json_data = json.dumps(cluster_data)
-
         # 创建 MySQL 集群节点
         self.create_node(path=mysql_cluster_node, value=cluster_json_data)
-        # 创建 MySQL Cluster Master 节点
-        self.create_node(path=agent_queue_node)
-        # 创建 MySQL Agent Queue 节点
-        self.create_node(path=cluster_master_node)
-        # 创建 Agent Leader Node 节点
-        self.create_node(path=agent_leader_node)
-        # 创建 更新MySQL集群数据锁节点
-        self.create_node(path=update_cluster_data_lock_node)
-        # 创建 agent 正在工作的节点
-        self.create_node(path=agent_warking_node)
-        # 创建 优先使用机房节点
-        self.create_node(path=priority_machine_room_node)
-        # 创建 优先使用机房节点
-        self.create_node(path=agent_leader_election_node)
    
     def do_queue_once(self):
         """Manager处理一次队列
@@ -423,9 +429,9 @@ class EMHAManager(object):
             # 初始化需要的集群节点
             self.init_cluster_nodes(name = info['node_name'])
 
-            mysql_cluster_node =
+            mysql_cluster_node = (
                 '{path}/{node}'.format(path = EMHAPath.emha_nodes['mysql_clusters']['path'],
-                                       node = name)
+                                       node = info['node_name']))
             # 监听新节点
             self.mysql_cluster_children_watch(path=mysql_cluster_node)
         else:

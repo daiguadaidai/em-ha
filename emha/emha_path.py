@@ -86,6 +86,12 @@ class EMHAPath(object):
             'value': 'tag current cluster master',
         },
 
+        # 设置集群多活类型
+        'mul_live_type': {
+            'path': '/em-ha/mul-live-type',
+            'value': 'tag cluster multiple live type',
+        },
+
         # 没有个Agent需要处理的队列
         'agent_queue': {
             'path': '/em-ha/agent-queue',
