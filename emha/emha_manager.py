@@ -123,7 +123,7 @@ class EMHAManager(object):
         # 2. 添加队列
         value = {
             'nodes': children,
-            'action': 0,
+            'action': 1,
         }
         json_value = json.dumps(value)
         self.put_queue(cluster_queue, json_value)
@@ -404,7 +404,7 @@ class EMHAManager(object):
 
         # 初始化集群节点数据
         cluster_data = {
-            'machine-rooms': {},
+            'machine_rooms': {},
         }
         cluster_json_data = json.dumps(cluster_data)
         # 创建 MySQL 集群节点

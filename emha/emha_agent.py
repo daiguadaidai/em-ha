@@ -4,6 +4,7 @@
 from kazoo.client import KazooClient
 from kazoo.recipe.watchers import ChildrenWatch
 from emha_path import EMHAPath
+from mysqltool import MySQLTool
 import simplejson as json
 import time
 import os
@@ -86,7 +87,7 @@ class EMHAAgent(object):
         # 监听leader
         self.leader_watch_children()
         # 恢复工作
-        # self.recovery()
+        self.recovery()
         # 处理队列
         # self.do_queue()
 
@@ -119,6 +120,18 @@ class EMHAAgent(object):
         print_str = '[{path}] not exists, created it!'.format(path = path)
         logging.info(print_str)
 
+        return True
+
+    def remove_node(self, path=None):
+        """删除节点"""
+
+        if not self.zk.exists(path):
+            print_str = '[{path}] dose not exists!'.format(path = path)
+            logging.warn(print_str)
+            return False
+
+        self.zk.delete(path)
+        logging.info('{node} is removed.'.format(node=path))
         return True
 
     def notify_mgr(self, value=None):
@@ -184,29 +197,36 @@ class EMHAAgent(object):
             cluster_info: 当前的集群节点数据
         """
         # 获取集群节点的数据
-        actioin_type = None
+        action_type = None
 
-        data = self.zk.get(path)
+        data, znodestat = self.zk.get(path)
 
         cluster_info = json.loads(data)
         instances = self.get_cluster_nodes(cluster_info)
 
         logging.info('cluster info: {info}'.format(info=cluster_info))
-        logging.info('old nodes: {instances}'.format(instances=instances))
-        logging.info('new current {nodes}: {nodes}'.format(nodes=nodes))
+        logging.info('old instances: {instances}'.format(instances=instances))
+        logging.info('current instances {instances}'.format(instances=nodes))
 
         if len(instances) > len(nodes):
-            actioin_type = 'remove'
+            action_type = 'remove'
         elif len(instances) < len(nodes):
-            actioin_type = 'add'
+            action_type = 'add'
 
         logging.info('The Agent Action is: {tag}'.format(tag = action_type))
 
-        node = set(instances) ^ len(nodes) # 获取两个集合不同的节点
-        logging.info('{tag} Node is: '.format(tag = action_type,
-                                              node = node))
+        node = list(set(instances) ^ set(nodes)) # 获取两个集合不同的节点
 
-        return actioin_type, node, cluster_info
+        # bug
+        if node: # 暂时只能有一个Node的差别,
+            node = node.pop()
+        else:
+            logging.warn('Diff Node Result: None. Cluster data already have this None')
+
+        logging.info('{tag} Node is: {node}'.format(tag = action_type,
+                                                    node = node))
+
+        return action_type, node, cluster_info
 
     def get_cluster_nodes(self, cluster_data):
         """从集群数据中获得所有集群节点
@@ -217,12 +237,16 @@ class EMHAAgent(object):
 
         for room, typs in cluster_data['machine_rooms'].iteritems():
             for typ in typs:
-               for instance in cluster_data['machine_rooms'][room][typ]:
-                   instances.append(instance)
+               # 添加元素到一个list中
+               if type(cluster_data['machine_rooms'][room][typ]) == str:
+                   instances.append(cluster_data['machine_rooms'][room][typ])
+               elif type(cluster_data['machine_rooms'][room][typ]) == list:
+                   for instance in cluster_data['machine_rooms'][room][typ]:
+                       instances.append(instance)
 
         return instances
 
-    def get_new_cluster_data(self, nodes):
+    def instances2topo(self, nodes):
         """获取最新的集群节点数据
         Args
             nodes: 集群变更后的节点
@@ -238,10 +262,16 @@ class EMHAAgent(object):
             if not new_cluster_info['machine_rooms'].has_key(room):
                 new_cluster_info['machine_rooms'][room] = {}
 
+            # master只有一个节点
+            if typ.lower() == 'master':
+                new_cluster_info['machine_rooms'][room][typ] = node
+                continue
+
             # 添加新实例类型
             if not new_cluster_info['machine_rooms'][room].has_key(typ):
                 new_cluster_info['machine_rooms'][room][typ] = []
 
+            # dt/slaves/delay 有多个节点
             new_cluster_info['machine_rooms'][room][typ].append(node)
 
         return new_cluster_info
@@ -252,94 +282,258 @@ class EMHAAgent(object):
             path: MySQL集群节点
             new_nodes: MySQL节点变化后的节点
         """
+        data = json.dumps(data)
         self.zk.set(path, data)
+        logging.info('save data to {path}: {data}'.format(path=path, data=data))
 
-    def has_master(self, mul_live_type, node):
+    def get_node_info(self, node, sep=':'):
+        """分解节点获得相关信息"""
+        return node.split(':')
+
+    def node_is_master(self, node):
+        """判断节点是否是Master"""
+        if not node:
+            return False
+
+        project, room, typ, host, port = self.get_node_info(node)
+        if typ.lower() == 'master':
+            return True
+
+        return False
+
+    def exists_master(self, mul_live_type, node):
         """该集群是否有Master
         Arg
             mul_live_type: 集群类型
-            node: 新添加实例名
+            node: 实例名称
         """
         # 获得Master节点
         path = '{path}/{project}'.format(
-                path = path = EMHAPath.emha_nodes['cluster_master']['path'],
+                path = EMHAPath.emha_nodes['cluster_master']['path'],
                 project = self.project)
 
-        masters = self.zk.et_children(path)
+        masters = self.zk.get_children(path)
+
+        logging.info('Current Master iS: {master}'.format(master = masters))
 
         if not masters: # 没有Master
             return False
 
-        project, room, typ, host, port = node.split(':')
+        project, room, typ, host, port = self.get_node_info(node)
 
         if mul_live_type == 'drc': # DRC 模式
-            has = False
             for master in masters:
-                master_project, master_room, master_typ, master_host, master_port = master.split(':')
+                master_project, master_room, master_typ, master_host, master_port = self.get_node_info(master)
                 if master_room == room:
                     return True
 
             return False
              
-        elif mul_live_type == 'gz': # Global Zone 模式
+        elif mul_live_type in ['gz', 'normal']: # Global Zone 模式
             return True
         else: # 普通集群模式
             return True
 
-    def set_master(self, node):
-        """判断并且设置集群Master"""
-
+    def get_mul_live_type(self, mul_live_type_path=None):
+        """获得多活类型"""
         # 获得集群类型
-        mul_live_type_path = '{path}/{project}'.format(
-                              path = EMHAPath.emha_nodes['mul_live_type']['path'],
-                              project = self.project)
-        mul_live_type = self.zk.get(path=mul_live_type_path)
+        if not mul_live_type_path:
+            mul_live_type_path = '{path}/{project}'.format(
+                                  path = EMHAPath.emha_nodes['mul_live_type']['path'],
+                                  project = self.project)
+        mul_live_type, znodestat = self.zk.get(path=mul_live_type_path)
+
+        if mul_live_type.lower() not in ['drc', 'gz', 'normal']:
+            logging.warn('Multiple Live Type is: {tpy}. Error Type'.format(tpy=mul_live_type))
+            logging.warn('Multiple Live Type Redirector.')
+            mul_live_type = 'normal'
+
         logging.info('Multiple Live Type is: {mul_live_type}'.format(mul_live_type=mul_live_type))       
 
-        if not self.has_master(mul_live_type, node):
-            logging.info('Master not exits. create it.')       
-            self.create_node(path=node, value=node)
-            return
+        return mul_live_type
 
-        logging.info('Master already exits.')       
+    def get_priority_room(self):
+        """切换时优先选择的机房, 一般是针对 Global Zone 需要的.
+        主要是为了判断第一个主的Master是哪个
+        """
+        path = '{path}/{project}'.format(
+                                path = EMHAPath.emha_nodes['priority_machine_room']['path'],
+                                project = self.project)
+        room, znodestat = self.zk.get(path)
+        return room
+
+    def get_slaves(self, master, nodes):
+        """通过Master和集群拓扑获得相关slave"""
+        project, room, typ, host, port = self.get_node_info(master)
+        slaves = []
+        for instance in nodes:
+            i_project, i_room, i_typ, i_host, i_port = self.get_node_info(instance)
+            # 不在同一机房并不属于同一类型就是slave
+            if room == i_room and typ != i_typ:
+                slaves.append(instance)
+
+        return slaves
+
+    def add_master(self, node):
+        """判断并且设置集群Master"""
+        
+        master_node = '{path}/{project}/{node}'.format(
+                         path = EMHAPath.emha_nodes['cluster_master']['path'],
+                         project = self.project,
+                         node = node)
+        self.create_node(path=master_node, value=node)
+        logging.info('Create Master Node: {path} Successful...'.format(path = master_node))
+
+    def remove_master(self, node):
+        """移除Master"""
+        master_node = '{path}/{project}/{node}'.format(
+                         path = EMHAPath.emha_nodes['cluster_master']['path'],
+                         project = self.project,
+                         node = node)
+        
+        if not self.remove_node(master_node):
+            logging.warn('Master dose not exists. remove fail')
+            return False
+
+        logging.warn('Master Remove Successful...')
+        return True 
+
+    def election_master(self, cluster_info, dead_node, mul_live_type):
+        """从新的集群中选择出新的Master
+        Args
+            cluster_info: 现在所剩的所有实例
+            dead_node: 宕机的节点
+            mul_live_type: 多活类型
+        """
+        new_master_node = None
+
+        project, room, typ, host, port = self.get_node_info(dead_node)
+
+        # 如果没有 机房的信息直, 代表没有找到Master
+        if not cluster_info.has_key('machine_rooms'):
+            logging.error('cluster info Error, can not found key [machine_rooms]')
+            return new_master_node
+
+        # 是否存在slave, 从list中选举出最后一个Slave为新的Master
+        if cluster_info['machine_rooms'][room].has_key('slave'):
+
+            slave_count = len(cluster_info['machine_rooms'][room]['slave'])
+            if slave_count > 0: # 有master可以选择
+                new_master_node = cluster_info['machine_rooms'][room]['slave'][slave_count-1]
+                logging.info('room [{room}] slave found: {master}'.format(
+                                                       room = room,
+                                                       master = new_master_node))
+                return new_master_node
+            else:
+                logging.error('room [{room}] no slave found'.format(room=room))
+
+        # 在上面Slave中没有选举到Master,需要判断是否存在 DT
+        if cluster_info['machine_rooms'][room].has_key('dt'):
+            dt_count = len(cluster_info['machine_rooms'][room]['dt'])
+            if dt_count > 0: # 有master可以选择
+                new_master_node = cluster_info['machine_rooms'][room]['dt'][dt_count-1]
+                logging.info('room [{room}] dt slave found: {master}'.format(
+                                                       room = room,
+                                                       master = new_master_node))
+                return new_master_node
+            else:
+                logging.error('room [{room}] no dt slave found'.format(room=room))
+
+        logging.error('room [{room}] can not found new master.'.format(room=room))
+        return new_master_node
+
+    def slave2master(self, slave, nodes):
+        """将slave转化为master"""
+        project, room, typ, host, port = self.get_node_info(slave)
+        master = '{project}:{room}:{typ}:{host}:{port}'.format(
+                                           project = project,
+                                           room = room,
+                                           typ = 'master',
+                                           host = host,
+                                           port = port)
+        logging.info('convert S[{slave}] to M[{master}]'.format(
+                                                          slave = slave,
+                                                          master = master))
+
+        # 获得所有实例节点
+        instances = list(set(nodes) - set([master]))
+        # 添加新Master
+        instances.append(master)
+        # 获得新的拓扑信息
+        cluster_info = self.instances2topo(instances)   
+
+        return master, cluster_info
 
     def deal_action(self, action=0, nodes=[]):
         """通过给的数据处理相关信息
         Args
             action: 需要做什么操作, README中有接收各种标号代表什么
         """
-
         action = int(action)
 
         if action == 0:
             return
 
         if action == 1: # 有增删节点操作
+            # 获取最新的集群信息
+            cluster_info = self.instances2topo(nodes)   
+
             # 判断是增加还是删除
             action_type, node, cluster_info = self.diff_node(
                                   path = self.cluster_node_path,
                                   nodes = nodes)
 
+            # 判断该节点是否是Master
+            if not self.node_is_master(node):
+                logging.info('The change Node is not Master. No Opration.')
+                return
+
+            logging.warn('The change Node is Master.......')
+
+            # 获得多活类型
+            mul_live_type = self.get_mul_live_type()
+
             if action_type == 'add': # 如果是新加节点需要设置master
                 # 判断master是否存在 TODO
-                self.set_master(node)
+                if self.exists_master(mul_live_type, node):
+                    logging.info('Master exists. Needn\'t Add.')
+                    # 设置罪行集群信息
+                    self.save_data(self.cluster_node_path, cluster_info)
+                    return
+
+                # 不存在Master则创建Master
+                logging.info('Master dose not exits. create it')       
+                self.add_master(node) # 设置Master
+
             elif action_type == 'remove': # 集群切换
-                self.remove_instance(node)
+                # 移除该Master
+                self.remove_master(node)
 
-            # 获取最新的集群信息
-            new_cluster_info = self.get_new_cluster_data(nodes)   
+                # 选出候选Master,此时该节点标识还不是master: project:room:slave/dt:host:port
+                backend_master = self.election_master(cluster_info, node, mul_live_type)
+
+                if not backend_master:
+                    logging.error("Election New Master Fail. Please Deal With it")
+                    # 需要进行告警
+                else: 
+                    # 获得新的MySQL拓扑
+                    master, cluster_info = self.slave2master(backend_master, nodes)
+                    slaves = self.get_slaves(master, nodes)
+                    # 进行MySQL切换
+                    mysql_tool = MySQLTool()
+                    mysql_tool.failover(master, slaves)
+                    self.add_master(master)
+                
+
             # 设置罪行集群信息
-            self.save_data(self.cluster_node_path, new_cluster_info)
-            # 判断是否需要切换
-            # TODO
-
+            self.save_data(self.cluster_node_path, cluster_info)
 
     def recovery(self):
         """从工作区中恢复未完成的工作"""
         if not self.is_leader:
             return False
 
-        logging.info('starting recovery cluster working...')
+        logging.info('------------------ start recovery ------------------------')
 
         # 获取所有需要恢复的节点
         working_path = '{path}/{project}'.format(
@@ -354,15 +548,17 @@ class EMHAAgent(object):
             recovery_node = '{working_path}/{node}'.format(working_path = working_path,
                                                            node = node)
             logging.info('recovery node: {recovery_node}'.format(recovery_node = recovery_node))
-            data = self.zk.get(recovery_node)
+            data, znodestat = self.zk.get(recovery_node)
             logging.info('recovery data: {data}'.format(data = data))
             json_data = json.loads(data)
 
             # 处理相关未完成工作
             self.deal_action(**json_data)
             # 处理完之后就可以删除相关的节点
-            self.zk.delete(recovery_node)
+            self.remove_node(recovery_node)
             logging.info('recovery node: {recovery_node} Successful'.format(recovery_node = recovery_node))
+
+        logging.info('------------------ recovery end ------------------------')
 
     def do_queue(self):
         """获取队列信息。并且进行操作"""

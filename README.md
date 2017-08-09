@@ -22,8 +22,18 @@ Agent Node Name: `project:room:typ:host:port`
 ```
 cluster_data = {
     'machine_rooms': {
-        'room_1': ['instance1', 'instance2'],
-        'room_2': ['instance3', 'instance4'],
+        'room_1': {
+            'master': 'instance1'
+            'slave': [instance2, 'instance3],
+            'dt': [instance2, 'instance3],
+            'delay': [instance2, 'instance3],
+        },
+        'room_2': {
+            'master': 'instance1'
+            'slave': [instance2, 'instance3],
+            'dt': [instance2, 'instance3],
+            'delay': [instance2, 'instance3],
+        },
     },
 }
 ```
